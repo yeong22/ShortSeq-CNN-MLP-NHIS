@@ -1,0 +1,42 @@
+{
+  "title": "ShortSeq-CNN-MLP-NHIS: liver cancer risk prediction from longitudinal health screening and claims records",
+  "description": "<p>Code for: Choi Y, Cho S, Gu C, Kim C, Park B, Kim H. Liver cancer risk stratification using deep learning on nationwide longitudinal health screening data: a retrospective cohort study. BMC Medical Informatics and Decision Making. 2026;26:44. https://doi.org/10.1186/s12911-025-03323-x</p><p>ShortSeq-CNN-MLP is a fusion model for short longitudinal health records: a 1D CNN reads repeated measurements from three biennial health screenings and an MLP reads static predictors to predict 5-year liver cancer risk. The repository covers cohort construction from Korean National Health Insurance Service (NHIS) screening and claims tables, logistic regression, XGBoost, MLP and fusion models, evaluation (bootstrap confidence intervals, DeLong tests, the KNKPC surveillance rule, risk quintiles with Kaplan-Meier and Cox analysis, calibration), SHAP explanations, SAS Cox models, and synthetic data for an end-to-end run. The same pipeline runs on other patient-level EHR/EMR or claims tables with a few repeated visits. Please cite the article if you use this code.</p>",
+  "upload_type": "software",
+  "access_right": "open",
+  "license": "apache-2.0",
+  "creators": [
+    {"name": "Choi, Yewon", "affiliation": "Institute for Innovation in Digital Healthcare, Yonsei University Health System; Department of Integrative Medicine, Yonsei University College of Medicine"},
+    {"name": "Cho, Sungmin", "affiliation": "Institute for Innovation in Digital Healthcare, Yonsei University Health System"},
+    {"name": "Gu, Changdai", "affiliation": "Institute for Innovation in Digital Healthcare, Yonsei University Health System; Department of Artificial Intelligence, Yonsei University"},
+    {"name": "Kim, Chungho", "affiliation": "Department of Preventive Medicine, College of Medicine, Chung-Ang University"},
+    {"name": "Park, Bomi", "affiliation": "Department of Preventive Medicine, College of Medicine, Chung-Ang University"},
+    {"name": "Kim, Hwiyoung", "affiliation": "Institute for Innovation in Digital Healthcare, Yonsei University Health System; Department of Neurosurgery, Yonsei University College of Medicine; Department of Artificial Intelligence, Yonsei University"}
+  ],
+  "keywords": [
+    "electronic health records",
+    "EHR",
+    "EMR",
+    "claims data",
+    "health screening",
+    "longitudinal data",
+    "time series",
+    "liver cancer",
+    "hepatocellular carcinoma",
+    "cancer risk prediction",
+    "clinical prediction model",
+    "deep learning",
+    "convolutional neural network",
+    "multimodal fusion",
+    "explainable AI",
+    "SHAP",
+    "NHIS"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "10.1186/s12911-025-03323-x",
+      "relation": "isSupplementTo",
+      "scheme": "doi",
+      "resource_type": "publication-article"
+    }
+  ]
+}
