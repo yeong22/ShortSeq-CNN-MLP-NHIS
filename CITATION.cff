@@ -17,6 +17,11 @@ authors:
     given-names: Bomi
   - family-names: Kim
     given-names: Hwiyoung
+doi: 10.5281/zenodo.24392754
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.24392754
+    description: "Zenodo archive of the code, all versions"
 repository-code: "https://github.com/yeong22/ShortSeq-CNN-MLP-NHIS"
 url: "https://link.springer.com/article/10.1186/s12911-025-03323-x"
 license: Apache-2.0

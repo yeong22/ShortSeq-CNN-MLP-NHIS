@@ -3,7 +3,8 @@
 
 <p align="center">
   <a href="https://link.springer.com/article/10.1186/s12911-025-03323-x"><img src="https://img.shields.io/badge/Paper-BMC%20Med%20Inform%20Decis%20Mak%202026-1f6feb" alt="Paper"></a>
-  <a href="https://doi.org/10.1186/s12911-025-03323-x"><img src="https://img.shields.io/badge/DOI-10.1186%2Fs12911--025--03323--x-informational" alt="DOI"></a>
+  <a href="https://doi.org/10.1186/s12911-025-03323-x"><img src="https://img.shields.io/badge/DOI-10.1186%2Fs12911--025--03323--x-informational" alt="Paper DOI"></a>
+  <a href="https://doi.org/10.5281/zenodo.24392754"><img src="https://zenodo.org/badge/DOI/10.5281/zenodo.24392754.svg" alt="Code DOI (Zenodo)"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache--2.0-green" alt="License"></a>
   <img src="https://img.shields.io/badge/Python-3.10-3776AB" alt="Python 3.10">
   <img src="https://img.shields.io/badge/PyTorch-2.5-EE4C2C" alt="PyTorch 2.5">
@@ -218,12 +219,13 @@ Data preparation follows the original analysis notebooks, so the cohort and pred
 ├── data/README.md           # data access and column definitions
 ├── imgs/                    # figures from the paper
 ├── CITATION.cff             # GitHub "Cite this repository"
+├── .zenodo.json             # Zenodo archive metadata (code DOI)
 └── LICENSE                  # Apache-2.0
 ```
 
 ## Citation
 
-If you use this code or the ShortSeq-CNN-MLP model, please cite the paper. GitHub's **Cite this repository** button gives the same reference.
+If you use this code or the ShortSeq-CNN-MLP model, please cite the paper. GitHub's **Cite this repository** button gives the same reference. The code itself is archived on Zenodo: [doi:10.5281/zenodo.24392754](https://doi.org/10.5281/zenodo.24392754) (all versions).
 ```bibtex
 @article{choi2026liver,
   title   = {Liver cancer risk stratification using deep learning on nationwide longitudinal health screening data: a retrospective cohort study},
