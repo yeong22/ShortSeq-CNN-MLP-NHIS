@@ -45,18 +45,19 @@ Yearly columns are named `<prefix>_<year>`, e.g. `G1E_BMI_2014`.
 | t20/t20_<y>.csv | `INDI_DSCM_NO`, `SICK_SYM1`–`SICK_SYM5` (ICD-10 without dot), `MDCARE_STRT_DT` (YYYYMMDD) | 2007–2015 |
 
 `liver_sex_<y>` is the sex-specific liver cancer definition: ICD-10 C22.0 or C22.9 as the
-primary diagnosis for men, C22.0 for women. If a `diagnosis_date` column is present in
+primary diagnosis for men, C22.0 for women. If a `diagnosis_date` column (YYYYMMDD) is present in
 target_cancer.csv, it is used for follow-up time; otherwise the middle of the diagnosis year is used.
+Death dates (`DTH_ASSMD_DT`) are read the same way.
 
 ## How each predictor is built (`liverrisk/cohort.py`)
 
 | Predictor | Rule |
 |---|---|
-| Period value (t1 2010–11, t2 2012–13, t3 2014–15) | first exam in the period; the second year fills a missing first year |
-| Alcohol | drinks/day = days/week × drinks per occasion / 7; 0, <1, <2, <4, ≥4 → 0–4 |
+| Period value (t1 2010–11, t2 2012–13, t3 2014–15) | first exam in the period; the second year fills a missing first year, as in the analysis notebooks (`cohort.period_value: last` takes the most recent exam, as the paper words it) |
+| Alcohol | drinks/day = days/week × drinks per occasion / 7 (a missing amount counts as 0 only when days/week is 0); 0, <1, <2, <4, ≥4 → 0–4 |
 | Physical activity | (vigorous + moderate days/week) / 2; 0, <2, <4, ≥4 → 0–3 |
-| Household income | contribution levels 17–20, 11–15, 5–9, 0–4 → quartiles 1 (highest) to 4 |
+| Household income | contribution levels 17–20, 11–15, 5–9, 0–4 → four groups, 1 (highest) to 4; levels 10 and 16 are treated as missing, as in the notebooks |
 | Self-reported history | ever reported 2010–2015; a blank answer in an exam year counts as no |
 | Family history | ever reported 2010–2015; a blank answer in a year with a questionnaire counts as no |
-| HBV, HCV, ALD, MASLD, cryptogenic liver disease, cirrhosis | any claim 2007–2015 with a code in `icd10` (Table S2) in any of the five diagnosis fields |
+| HBV, HCV, ALD, MASLD, cryptogenic liver disease, cirrhosis | any claim 2007–2015 with a code in `icd10` in any of the five diagnosis fields (the notebook lists; Table S2 prints a few codes differently) |
 | Age | 2016 − birth year |

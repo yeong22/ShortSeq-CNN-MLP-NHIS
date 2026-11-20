@@ -1,0 +1,59 @@
+cff-version: 1.2.0
+message: "If you use this code or the ShortSeq-CNN-MLP model, please cite the paper below."
+title: "ShortSeq-CNN-MLP-NHIS: liver cancer risk prediction from longitudinal health screening and claims records"
+type: software
+version: 1.0.0
+date-released: 2026-11-20
+authors:
+  - family-names: Choi
+    given-names: Yewon
+  - family-names: Cho
+    given-names: Sungmin
+  - family-names: Gu
+    given-names: Changdai
+  - family-names: Kim
+    given-names: Chungho
+  - family-names: Park
+    given-names: Bomi
+  - family-names: Kim
+    given-names: Hwiyoung
+repository-code: "https://github.com/yeong22/ShortSeq-CNN-MLP-NHIS"
+url: "https://link.springer.com/article/10.1186/s12911-025-03323-x"
+license: Apache-2.0
+keywords:
+  - electronic health records
+  - EHR
+  - EMR
+  - claims data
+  - health screening
+  - longitudinal data
+  - time series
+  - liver cancer
+  - hepatocellular carcinoma
+  - cancer risk prediction
+  - deep learning
+  - convolutional neural network
+  - explainable AI
+  - SHAP
+preferred-citation:
+  type: article
+  title: "Liver cancer risk stratification using deep learning on nationwide longitudinal health screening data: a retrospective cohort study"
+  authors:
+    - family-names: Choi
+      given-names: Yewon
+    - family-names: Cho
+      given-names: Sungmin
+    - family-names: Gu
+      given-names: Changdai
+    - family-names: Kim
+      given-names: Chungho
+    - family-names: Park
+      given-names: Bomi
+    - family-names: Kim
+      given-names: Hwiyoung
+  journal: "BMC Medical Informatics and Decision Making"
+  volume: 26
+  start: 44
+  year: 2026
+  doi: "10.1186/s12911-025-03323-x"
+  url: "https://link.springer.com/article/10.1186/s12911-025-03323-x"
