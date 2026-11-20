@@ -147,6 +147,17 @@ HBV, family history of liver cancer, sex and total cholesterol at t3 contribute 
 └── imgs/                    # figures from the paper
 ```
 
+## Notes on Reproducibility
+
+This code follows the procedure described in the paper. The original analysis notebooks differed in a few places, so a run on the NHIS data may not match the published numbers exactly.
+
+- **Early stopping**: the notebooks monitored the test set during the final training of the MLP and fusion model. Here a validation split of the training set is used, as described in Methods S2.
+- **Train/test split**: the notebooks drew five stratified splits and kept the one where logistic regression had the highest test AUROC. Here a single seeded stratified split is used.
+- **Hyperparameter search**: run on one 80/20 split of the training set, not five-fold cross-validation as stated in the Methods. The defaults are the final values in Table S4.
+- **Follow-up**: outcomes are counted from 2016 through 2020 (five years, Fig. 1). The main text gives December 31, 2021.
+- **Income**: insurance contribution levels 10 and 16 were not assigned to an income group and are treated as missing (`cohort.income_groups` in the config).
+- **Written from the Methods**: bootstrap CIs, DeLong tests, the KNKPC rule, and the risk-quintile Kaplan–Meier and Cox analysis. The Fine-Gray model (Table S9) is not included.
+
 ## Citation
 ```bibtex
 @article{choi2026liver,
