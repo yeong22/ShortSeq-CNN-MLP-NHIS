@@ -1,0 +1,29 @@
+# Synthetic-data run (scripts/make_toy_data.py). Same pipeline, smaller and faster.
+inherit: default.yaml
+
+paths:
+  raw_dir: data/toy/raw
+  processed_dir: data/toy/processed
+  output_dir: outputs/toy
+
+models:
+  mlp:
+    optim: {batch_size: 256}
+  fusion:
+    optim: {batch_size: 256}
+
+train:
+  max_epochs: 30
+  early_stopping_patience: 6
+  num_workers: 0
+
+search:
+  torch_epochs: {mlp: 2, fusion: 2}
+  torch_patience: 2
+
+evaluate:
+  n_bootstrap: 100
+
+explain:
+  sample_ratio: 0.5
+  n_background: 50

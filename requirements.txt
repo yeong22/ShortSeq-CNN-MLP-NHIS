@@ -1,0 +1,12 @@
+# Tested with Python 3.10. The paper's analysis used Python 3.8, PyTorch 1.9.1, scikit-learn 0.24.2.
+numpy==2.0.2
+pandas==2.2.3
+scipy==1.14.1
+scikit-learn==1.5.2
+xgboost==2.1.4
+torch==2.5.1
+shap==0.46.0
+lifelines==0.30.0
+matplotlib==3.9.4
+PyYAML==6.0.3
+tabulate==0.10.0

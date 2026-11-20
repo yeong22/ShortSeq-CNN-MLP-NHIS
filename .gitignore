@@ -1,0 +1,18 @@
+# data never leaves the analysis environment
+data/*
+!data/README.md
+outputs/
+
+# model files and caches
+*.pt
+*.pth
+*.pkl
+*.joblib
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# secrets and local files
+.env
+.DS_Store
+*.sas7bdat

@@ -1,0 +1,255 @@
+# Default settings for the paper (BMC Med Inform Decis Mak 2026;26:44).
+# Every number the code uses lives here. Edit this file, not the code.
+
+seed: 42
+
+paths:
+  raw_dir: data/raw               # NHIS tables (see data/README.md)
+  processed_dir: data/processed   # analytic cohort + train/test split
+  output_dir: outputs             # models, predictions, metrics, figures
+
+raw_files:
+  screening: target_g1eq.csv        # health screening results + self-reported history
+  questionnaire: g1eq_total.csv     # raw questionnaire answers (alcohol, exercise)
+  cancer: target_cancer.csv         # demographics, insurance contribution, yearly cancer flags, death
+  family: target_cq.csv             # family history of cancer
+  claims_pattern: t20/t20_{year}.csv  # outpatient/inpatient claims, one file per year
+
+id_column: INDI_DSCM_NO
+
+# NHIS column names. Yearly columns are "<prefix>_<year>", e.g. G1E_BMI_2014.
+raw_columns:
+  screening:               # measured at each exam; value per period = first exam of the period
+    bmi: G1E_BMI
+    hemoglobin: G1E_HGB
+    glucose: G1E_FBS
+    waist: G1E_WSTC
+    total_chol: G1E_TOT_CHOL
+    hdl: G1E_HDL
+    smoking: smoke_f       # 1 never, 2 former, 3 current
+  attendance_flag: check_g1eq   # 1 = attended the exam that year (BMI present is used when the flag is absent)
+  history:                 # self-reported "ever" over 2010-2015
+    stroke: stork
+    heart_disease: heart
+    hypertension: hyper
+    diabetes: diabetes
+    dyslipidemia: lipid
+  questionnaire:
+    drink_days_per_week: Q_DRK_FRQ_V09N
+    drinks_per_occasion: Q_DRK_AMT_V09N
+    vigorous_days: Q_PA_VD
+    moderate_days: Q_PA_MD
+  family:
+    family_liver_cancer: f_clv
+    family_other_cancer: f_clv_other
+  family_flag: check
+  cancer:
+    sex: SEX_TYPE          # 1 men, 2 women
+    birth_year: BYEAR
+    contribution: CTRB     # insurance contribution level 0-20
+    any_cancer: all_cancer
+    liver_cancer: liver_sex   # sex-specific definition: C22.0/C22.9 (men), C22.0 (women)
+    death_date: DTH_ASSMD_DT
+  claims_date: MDCARE_STRT_DT
+
+cohort:
+  index_year: 2016                # follow-up starts 2016-01-01
+  age_reference_year: 2012        # cohort = aged 50-69 in 2012
+  age_range: [50, 69]
+  age_at_index_from: 2016         # age feature = 2016 - birth year
+  washout_years: [2007, 2015]     # any cancer in these years -> excluded
+  death_exclusion_years: [2007, 2015]
+  label_years: [2016, 2020]       # 5-year outcome window (Fig. 1)
+  icd_history_years: [2007, 2015] # claims window for liver-disease history
+  diagnosis_columns: [SICK_SYM1, SICK_SYM2, SICK_SYM3, SICK_SYM4, SICK_SYM5]
+  periods:                        # biennial screening intervals
+    t1: [2010, 2011]
+    t2: [2012, 2013]
+    t3: [2014, 2015]
+  # Insurance contribution (20 levels) -> household income quartile, 1 = highest.
+  # Values not listed are treated as missing, as in the original analysis.
+  income_groups:
+    1: [17, 18, 19, 20]
+    2: [11, 12, 13, 14, 15]
+    3: [5, 6, 7, 8, 9]
+    4: [0, 1, 2, 3, 4]
+  # drinks/day: 0 -> 0, <1 -> 1, <2 -> 2, <4 -> 3, else 4
+  alcohol_cutoffs: [1, 2, 4]
+  # exercise days/week, mean of vigorous and moderate: 0 -> 0, <2 -> 1, <4 -> 2, else 3
+  activity_cutoffs: [2, 4]
+  # Event time when only the diagnosis year is known (a diagnosis_date column is used if present).
+  event_time: mid_year
+
+# ICD-10 codes for liver-disease history (Table S2). Codes are written without the dot.
+# "X" matches any single character and the pattern is matched as a prefix;
+# a pattern without "X" must match the whole code.
+icd10:
+  hcv: [B1710, B1711, B182, B1920, B1921]
+  hbv: [B16X, B170, B180, B181, B191X]
+  ald: [F10X, F10XX, F10XXX, G621, I426, K292X, K70X, K70XX, R780,
+        T510X1, T510X2, T510X3, T510X4, T518X1, T518X2, T518X3, T518X4,
+        T5191X, T5192X, T5193X, T5194X]
+  masld: [E11X, E11XX, E11XXX, E13X, E13XX, E13XXX, E66X, E66XX, E670, E678, E680,
+          E7521, E7522, E75249, E770, E771, E78X, E78XX, E8881X, I100, I10,
+          I11X, I12X, I13X, I13XX, I15X, I16X, K7581, K760, K7689, R635,
+          R73X, R73XX, Z683X, Z684X, Z9884]
+  cryptogenic: [K754, K830, K8301, E83110]
+  cirrhosis: [E83110, I85X, I85XX, K703X, K717, K743, K744, K745, K746X,
+              K766, K767, K7682, K7011, K7031, K7151, R180, R188]
+
+features:
+  # Measured at every screening period -> one channel per variable in the 1D CNN.
+  temporal_continuous: [bmi, hemoglobin, glucose, waist, total_chol, hdl]
+  temporal_ordinal: [alcohol, activity, smoking, income]
+  # Measured once (or summarised over 2010-2015).
+  static_continuous: [age]
+  static_binary: [sex, stroke, heart_disease, hypertension, diabetes, dyslipidemia,
+                  hcv, hbv, ald, masld, cryptogenic, cirrhosis,
+                  family_liver_cancer, family_other_cancer]
+  # Observation windows for the sensitivity analysis (Table S7).
+  windows:
+    t3: [t3]
+    t2+t3: [t2, t3]
+    t1+t2+t3: [t1, t2, t3]
+    t1: [t1]
+    t2: [t2]
+    t1+t2: [t1, t2]
+  main_window: t1+t2+t3
+
+split:
+  test_size: 0.2
+  seed: 6875
+  stratify_on: [liver_label, age_decade, sex]   # patient-level, stratified
+  valid_size: 0.2       # taken from the training set for early stopping / tuning
+  valid_seed: 42
+
+# Final hyperparameters (Table S4). "python main.py --step train --search" re-runs the search.
+models:
+  lr:
+    class_weight: balanced
+    solver: newton-cg
+    penalty: l2
+    tol: 0.001
+    C: 0.1
+    max_iter: 50
+  xgb:
+    objective: "binary:logistic"
+    eval_metric: logloss
+    scale_pos_weight: 1
+    n_estimators: 200
+    learning_rate: 0.1
+    min_split_loss: 0.1
+    max_depth: 3
+    subsample: 0.5
+    colsample_bytree: 0.5
+  mlp:
+    net: {fc_depth: 3, fc_hidden: 64, fc_activation: SiLU, batch_norm: false, dropout: 0.3}
+    optim: {optimizer: Adam, learning_rate: 0.001, batch_size: 1024}
+    loss: {gamma_pos: 0.05, gamma_neg: 2.5, margin: 0.1}
+    schedule: {T_0: 10, T_mult: 2, eta_min: 1.0e-6}
+  fusion:
+    net:
+      cnn_channels: 64
+      cnn_kernel_size: 3
+      cnn_depth: 2
+      cnn_dropout: 0.2
+      cnn_batch_norm: true
+      use_residual: true
+      cnn_activation: SiLU
+      fc_static_depth: 4
+      fc_static_hidden: 128
+      fc_combined_depth: 4
+      fc_combined_hidden: 256
+      fc_activation: SiLU
+      fc_dropout: 0.1
+      fc_batch_norm: true
+    optim: {optimizer: Adam, learning_rate: 0.001, batch_size: 9048}
+    loss: {gamma_pos: 0.05, gamma_neg: 2.5, margin: 0.2}
+    schedule: {T_0: 10, T_mult: 2, eta_min: 1.0e-8}
+
+train:
+  max_epochs: 100              # Methods S2
+  early_stopping_patience: 15  # on validation loss
+  grad_clip: 1.0
+  amp: true                    # mixed precision, only used on CUDA
+  num_workers: 4
+
+# Group-wise greedy search (Methods S2): tune one group at a time, keep the best, move on.
+search:
+  torch_epochs: {mlp: 20, fusion: 50}
+  torch_patience: 10
+  lr:
+    groups: [[solver], [penalty, tol, C], [max_iter], [class_weight]]
+    candidates:
+      solver: [liblinear, newton-cg]
+      penalty: [l2, l1]
+      tol: [0.01, 0.001]
+      C: [0.1, 0.5]
+      max_iter: [50]
+      class_weight: [null, balanced]
+  xgb:
+    groups: [[n_estimators], [learning_rate, min_split_loss], [max_depth, subsample], [colsample_bytree], [scale_pos_weight]]
+    candidates:
+      n_estimators: [100, 200]
+      learning_rate: [0.05, 0.1]
+      min_split_loss: [0.1, 0.5]
+      max_depth: [3, 10]
+      subsample: [0.5, 1.0]
+      colsample_bytree: [0.5, 1.0]
+      scale_pos_weight: [1, auto]   # auto = n_negative / n_positive
+  mlp:
+    groups: [[fc_activation], [learning_rate, optimizer], [gamma_pos, gamma_neg, margin], [batch_norm, dropout], [batch_size]]
+    candidates:
+      fc_activation: [ReLU, SiLU]
+      learning_rate: [0.001]
+      optimizer: [Adam, AdamW]
+      gamma_pos: [0.0, 0.05]
+      gamma_neg: [1.5, 2.5]
+      margin: [0.1, 0.2]
+      batch_norm: [true, false]
+      dropout: [0.0, 0.3]
+      batch_size: [1024]
+  fusion:
+    groups:
+      - [cnn_channels, cnn_depth]
+      - [cnn_dropout, cnn_batch_norm, cnn_activation, use_residual]
+      - [fc_activation, fc_dropout, fc_batch_norm]
+      - [fc_static_depth, fc_static_hidden, fc_combined_depth, fc_combined_hidden]
+      - [learning_rate, optimizer]
+      - [gamma_pos, gamma_neg, margin]
+      - [batch_size]
+    candidates:
+      cnn_channels: [64, 128]
+      cnn_depth: [2]
+      cnn_dropout: [0.0, 0.1, 0.2]
+      cnn_batch_norm: [true, false]
+      cnn_activation: [ReLU, SiLU]
+      use_residual: [true, false]
+      fc_activation: [ReLU, SiLU]
+      fc_dropout: [0.0, 0.1, 0.2]
+      fc_batch_norm: [true, false]
+      fc_static_depth: [2, 4]
+      fc_static_hidden: [64, 128]
+      fc_combined_depth: [2, 4]
+      fc_combined_hidden: [64, 128, 256]
+      learning_rate: [0.001, 0.0005]
+      optimizer: [Adam, AdamW]
+      gamma_pos: [0.0, 0.05]
+      gamma_neg: [1.5, 2.5]
+      margin: [0.1, 0.2]
+      batch_size: [512, 256]
+
+evaluate:
+  models: [lr, xgb, mlp, fusion]
+  reference_model: fusion        # DeLong tests compare every model with this one
+  n_bootstrap: 1000              # 95% CIs
+  cutoff: youden
+  cutoff_from: valid             # where the Youden cutoff is chosen: valid | test
+  knkpc_markers: [hbv, hcv, cirrhosis]   # 2022 KLCA-NCC surveillance target groups
+  n_risk_groups: 5               # quintiles of predicted risk
+
+explain:
+  model: fusion
+  sample_ratio: 0.01             # share of the test set explained
+  n_background: 50
+  max_display: 20
