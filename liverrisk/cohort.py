@@ -21,15 +21,29 @@ def _years(span: list[int]) -> list[int]:
     return list(range(span[0], span[1] + 1))
 
 
-def read_table(path: Path, id_col: str) -> pd.DataFrame:
-    df = pd.read_csv(path, dtype={id_col: str}, low_memory=False)
-    df.columns = [c.replace(" ", "") for c in df.columns]  # e.g. "CTRB_ 2010" -> "CTRB_2010"
+def read_table(path: Path, id_col: str, exact=(), prefixes=()) -> pd.DataFrame:
+    """Read only the ID, the `exact` columns and yearly columns '<prefix>_<year>'."""
+    wanted = {id_col, *exact}
+
+    def keep(col: str) -> bool:
+        name = col.replace(" ", "")  # NHIS exports contain names like "CTRB_ 2010"
+        return name in wanted or any(name.startswith(p + "_") for p in prefixes)
+
+    df = pd.read_csv(path, dtype={id_col: str}, usecols=keep, low_memory=False)
+    df.columns = [c.replace(" ", "") for c in df.columns]
     return df.set_index(id_col)
 
 
-def first_of_period(df: pd.DataFrame, prefix: str, years: list[int]) -> pd.Series:
-    """Value from the first exam of a period, filled with the next year's value if missing."""
-    cols = [f"{prefix}_{y}" for y in years if f"{prefix}_{y}" in df.columns]
+def period_value(df: pd.DataFrame, prefix: str, years: list[int], rule: str = "first") -> pd.Series:
+    """Value for one two-year screening period.
+
+    first: the first exam of the period; the second year fills a gap (the analysis notebooks).
+    last:  the most recent exam of the period; the first year fills a gap (the paper's wording).
+    """
+    if rule not in ("first", "last"):
+        raise ValueError(f"cohort.period_value must be 'first' or 'last', got {rule!r}")
+    order = years if rule == "first" else list(reversed(years))
+    cols = [f"{prefix}_{y}" for y in order if f"{prefix}_{y}" in df.columns]
     if not cols:
         raise KeyError(f"No columns {prefix}_<year> for years {years}")
     out = pd.to_numeric(df[cols[0]], errors="coerce")
@@ -50,6 +64,21 @@ def any_flag(df: pd.DataFrame, prefix: str, years: list[int]) -> pd.Series:
     if not cols:
         raise KeyError(f"No columns {prefix}_<year> for years {years}")
     return df[cols].apply(pd.to_numeric, errors="coerce").eq(1).any(axis=1)
+
+
+def parse_yyyymmdd(s: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Dates stored as YYYYMMDD (often read as floats because of blanks) -> (date, year).
+
+    A value with only a year or year-month gives NaT for the date and still returns the year.
+    """
+    num = pd.to_numeric(s, errors="coerce")
+    digits = num.round().astype("Int64").astype("string").where(num.notna())
+    digits = digits.fillna(s.astype("string").str.replace(r"\D", "", regex=True))
+    full = (digits.str.len() == 8).fillna(False)
+    date = pd.to_datetime(digits.where(full), format="%Y%m%d", errors="coerce")
+    # plain float, so a missing year compares as False rather than as a nullable NA
+    year = pd.to_numeric(digits.str[:4], errors="coerce").astype(float)
+    return date, year
 
 
 def categorize(x: pd.Series, cutoffs: list[float]) -> pd.Series:
@@ -73,49 +102,62 @@ def icd_regex(codes: list[str]) -> str:
 
 
 def liver_disease_history(cfg: dict, ids: pd.Index) -> pd.DataFrame:
-    """Ever-diagnosed flags (Table S2) from claims in the history window."""
+    """Ever-diagnosed flags from claims in the history window (codes in `icd10`).
+
+    Memory stays proportional to the number of people with a hit: only their IDs are kept.
+    """
     c = cfg["cohort"]
     raw_dir = paths(cfg)["raw"]
     id_col = cfg["id_column"]
     date_col = cfg["raw_columns"]["claims_date"]
     lo, hi = c["icd_history_years"]
     patterns = {name: icd_regex(codes) for name, codes in cfg["icd10"].items()}
+    wanted = {id_col, date_col, *c["diagnosis_columns"]}
     id_set = set(ids)
-    parts = []
+    hits: dict[str, set] = {name: set() for name in patterns}
+    total_rows = 0
     for year in _years(c["icd_history_years"]):
         path = raw_dir / cfg["raw_files"]["claims_pattern"].format(year=year)
         if not path.exists():
-            log.warning("claims file missing: %s", path)
-            continue
-        for chunk in pd.read_csv(path, dtype=str, chunksize=2_000_000):
+            raise FileNotFoundError(f"Claims file for {year} not found: {path} (see raw_files.claims_pattern)")
+        rows = 0
+        for chunk in pd.read_csv(path, dtype=str, chunksize=2_000_000,
+                                 usecols=lambda col: col.replace(" ", "") in wanted):
             chunk.columns = [col.replace(" ", "") for col in chunk.columns]
             chunk = chunk[chunk[id_col].isin(id_set)]
             start = pd.to_numeric(chunk[date_col].str[:4], errors="coerce")
             chunk = chunk[start.between(lo, hi)]
             if chunk.empty:
                 continue
+            rows += len(chunk)
             dx = [chunk[col].fillna("").str.strip() for col in c["diagnosis_columns"] if col in chunk.columns]
-            flags = pd.DataFrame(index=chunk.index)
+            codes = pd.Series(pd.unique(pd.concat(dx, ignore_index=True)))
             for name, pattern in patterns.items():
-                hit = pd.Series(False, index=chunk.index)
-                for codes in dx:
-                    hit |= codes.str.match(pattern)
-                flags[name] = hit.astype(int)
-            flags[id_col] = chunk[id_col].values
-            parts.append(flags.groupby(id_col).max())
-    if parts:
-        history = pd.concat(parts).groupby(level=0).max()
-    else:
-        history = pd.DataFrame(columns=list(patterns))
-    return history.reindex(ids).fillna(0).astype(int)
+                matching = set(codes[codes.str.match(pattern)])
+                if not matching:
+                    continue
+                mask = np.zeros(len(chunk), dtype=bool)
+                for col in dx:
+                    mask |= col.isin(matching).to_numpy()
+                hits[name].update(chunk.loc[mask, id_col])
+        log.info("claims %d: %d rows of cohort members in the window", year, rows)
+        total_rows += rows
+    if total_rows == 0:
+        raise ValueError("No claims rows matched a cohort ID. Check the ID format (e.g. '123' vs '123.0') "
+                         "and the claims date column.")
+    return pd.DataFrame({name: ids.isin(list(found)).astype(int) for name, found in hits.items()}, index=ids)
 
 
 def build_cohort(cfg: dict) -> pd.DataFrame:
     p = paths(cfg)
     c = cfg["cohort"]
     rc = cfg["raw_columns"]
+    rcc = rc["cancer"]
     files = cfg["raw_files"]
     id_col = cfg["id_column"]
+    label_col = cfg["label_column"]
+    rule = c["period_value"]
+    offset = 0.5 if c["event_time"] == "mid_year" else 0.0
     periods = {name: list(years) for name, years in c["periods"].items()}
     exam_years = sorted(y for years in periods.values() for y in years)
     flow: list[tuple[str, int, int]] = []  # (step, excluded, remaining)
@@ -125,13 +167,17 @@ def build_cohort(cfg: dict) -> pd.DataFrame:
         log.info("%-55s excluded %9d  remaining %9d", step, before - after, after)
 
     # --- base population ------------------------------------------------------------
-    people = read_table(p["raw"] / files["cancer"], id_col)
+    people = read_table(p["raw"] / files["cancer"], id_col,
+                        exact=[rcc["sex"], rcc["birth_year"], rcc["death_date"], rcc["diagnosis_date"]],
+                        prefixes=[rcc["contribution"], rcc["any_cancer"], rcc["liver_cancer"]])
     n0 = len(people)
-    birth = pd.to_numeric(people[rc["cancer"]["birth_year"]], errors="coerce")
+    birth = pd.to_numeric(people[rcc["birth_year"]], errors="coerce")
     people = people[(c["age_reference_year"] - birth).between(*c["age_range"])]
     record(f"Aged {c['age_range'][0]}-{c['age_range'][1]} in {c['age_reference_year']}", n0, len(people))
 
-    screen = read_table(p["raw"] / files["screening"], id_col).reindex(people.index)
+    screen = read_table(p["raw"] / files["screening"], id_col,
+                        prefixes=[*rc["screening"].values(), rc["attendance_flag"], *rc["history"].values()])
+    screen = screen.reindex(people.index)
     bmi_prefix = rc["screening"]["bmi"]
 
     def attended(year: int) -> pd.Series:
@@ -149,61 +195,59 @@ def build_cohort(cfg: dict) -> pd.DataFrame:
 
     # --- exclusions ---------------------------------------------------------------
     n = len(people)
-    people = people[~any_flag(people, rc["cancer"]["any_cancer"], _years(c["washout_years"]))]
+    people = people[~any_flag(people, rcc["any_cancer"], _years(c["washout_years"]))]
     record("Cancer before the index date", n, len(people))
 
-    death_raw = people[rc["cancer"]["death_date"]].astype(str).str.replace(r"\D", "", regex=True)
-    death_year = pd.to_numeric(death_raw.str[:4], errors="coerce")
+    death_date, death_year = parse_yyyymmdd(people[rcc["death_date"]])
     n = len(people)
     keep = ~death_year.between(*c["death_exclusion_years"])
-    people, death_raw, death_year = people[keep], death_raw[keep], death_year[keep]
+    people, death_date, death_year = people[keep], death_date[keep], death_year[keep]
     record("Death before the index date", n, len(people))
 
     label_years = _years(c["label_years"])
-    liver = any_flag(people, rc["cancer"]["liver_cancer"], label_years)
-    other = any_flag(people, rc["cancer"]["any_cancer"], label_years)
+    liver = any_flag(people, rcc["liver_cancer"], label_years)
+    other = any_flag(people, rcc["any_cancer"], label_years)
     label = pd.Series(np.where(liver, 1.0, np.where(~other, 0.0, np.nan)), index=people.index)
     n = len(people)
     keep = label.notna()
-    people, label, death_raw, death_year = people[keep], label[keep], death_raw[keep], death_year[keep]
+    people, label, death_date, death_year = people[keep], label[keep], death_date[keep], death_year[keep]
     record("Another cancer during follow-up", n, len(people))
+    screen = screen.loc[people.index]
 
     # --- outcome and follow-up time ---------------------------------------------------
     out = pd.DataFrame(index=people.index)
-    out["liver_label"] = label.astype(int)
+    out[label_col] = label.astype(int)
     onset = pd.Series(np.nan, index=people.index)
     for year in reversed(label_years):
-        col = f"{rc['cancer']['liver_cancer']}_{year}"
+        col = f"{rcc['liver_cancer']}_{year}"
         if col in people.columns:
             onset = onset.mask(pd.to_numeric(people[col], errors="coerce").eq(1), year)
     index_date = pd.Timestamp(year=c["index_year"], month=1, day=1)
     end = float(c["label_years"][1] - c["index_year"] + 1)
-    if "diagnosis_date" in people.columns:
-        event_time = (pd.to_datetime(people["diagnosis_date"], errors="coerce") - index_date).dt.days / 365.25
-    else:  # only the diagnosis year is known
-        event_time = onset - c["index_year"] + (0.5 if c["event_time"] == "mid_year" else 0.0)
-    death_time = (pd.to_datetime(death_raw.str[:8], format="%Y%m%d", errors="coerce") - index_date).dt.days / 365.25
-    death_time = death_time.fillna(death_year - c["index_year"] + 0.5)
-    died = death_time.between(0, end, inclusive="left") & out["liver_label"].eq(0)
+    event_time = onset - c["index_year"] + offset  # only the diagnosis year is known
+    if rcc["diagnosis_date"] in people.columns:
+        dx_date, _ = parse_yyyymmdd(people[rcc["diagnosis_date"]])
+        event_time = ((dx_date - index_date).dt.days / 365.25).fillna(event_time)
+    death_time = ((death_date - index_date).dt.days / 365.25).fillna(death_year - c["index_year"] + offset)
+    died = death_time.between(0, end, inclusive="left") & out[label_col].eq(0)
     out["death_event"] = died.astype(int)
-    out["fu_years"] = np.where(out["liver_label"].eq(1), event_time, np.where(died, death_time, end))
+    out["fu_years"] = np.where(out[label_col].eq(1), event_time, np.where(died, death_time, end))
 
     # --- predictors ---------------------------------------------------------------
-    sex_col = rc["cancer"]["sex"]
-    out["sex"] = pd.to_numeric(people[sex_col], errors="coerce")
-    out["age"] = c["age_at_index_from"] - pd.to_numeric(people[rc["cancer"]["birth_year"]], errors="coerce")
+    out["sex"] = pd.to_numeric(people[rcc["sex"]], errors="coerce")
+    out["age"] = c["age_at_index_from"] - pd.to_numeric(people[rcc["birth_year"]], errors="coerce")
 
     for feature, prefix in rc["screening"].items():
         for t, years in periods.items():
-            out[f"{feature}_{t}"] = first_of_period(screen, prefix, years)
+            out[f"{feature}_{t}"] = period_value(screen, prefix, years, rule)
 
     income_map = {level: group for group, levels in c["income_groups"].items() for level in levels}
     for t, years in periods.items():
-        contribution = first_of_period(people, rc["cancer"]["contribution"], years)
+        contribution = period_value(people, rcc["contribution"], years, rule)
         out[f"income_{t}"] = contribution.map(income_map)
 
-    quest = read_table(p["raw"] / files["questionnaire"], id_col).reindex(people.index)
     q = rc["questionnaire"]
+    quest = read_table(p["raw"] / files["questionnaire"], id_col, prefixes=list(q.values())).reindex(people.index)
     yearly = pd.DataFrame(index=people.index)
     for y in exam_years:
         yearly[f"alcohol_dpd_{y}"] = drinks_per_day(
@@ -216,7 +260,7 @@ def build_cohort(cfg: dict) -> pd.DataFrame:
         yearly[f"activity_{y}"] = categorize(yearly[f"activity_dpw_{y}"], c["activity_cutoffs"])
     for t, years in periods.items():
         for name in ["alcohol", "activity", "alcohol_dpd", "activity_dpw"]:
-            out[f"{name}_{t}"] = first_of_period(yearly, name, years)
+            out[f"{name}_{t}"] = period_value(yearly, name, years, rule)
 
     # Self-reported history: a missing answer in a year the person was examined counts as "no".
     for feature, prefix in rc["history"].items():
@@ -227,7 +271,8 @@ def build_cohort(cfg: dict) -> pd.DataFrame:
             cols.append(v.mask(examined & v.isna(), 0.0))
         out[feature] = pd.concat(cols, axis=1).max(axis=1)
 
-    family = read_table(p["raw"] / files["family"], id_col).reindex(people.index)
+    family = read_table(p["raw"] / files["family"], id_col,
+                        prefixes=[*rc["family"].values(), rc["family_flag"]]).reindex(people.index)
     for feature, prefix in rc["family"].items():
         cols = []
         for y in exam_years:
@@ -255,5 +300,5 @@ def build_cohort(cfg: dict) -> pd.DataFrame:
     ensure_dirs(p["processed"], p["results"])
     out.reset_index().to_csv(p["processed"] / "cohort.csv", index=False)
     pd.DataFrame(flow, columns=["step", "excluded", "remaining"]).to_csv(p["results"] / "cohort_flow.csv", index=False)
-    log.info("cohort: %d people, %d liver cancer cases", len(out), int(out["liver_label"].sum()))
+    log.info("cohort: %d people, %d cases", len(out), int(out[label_col].sum()))
     return out

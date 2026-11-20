@@ -52,8 +52,12 @@ def main() -> None:
         from liverrisk.evaluate import run_evaluate
         run_evaluate(cfg)
     if "explain" in steps:
-        from liverrisk.explain import run_explain
-        run_explain(cfg, device)
+        main_window = cfg["features"]["main_window"]
+        if args.step == "all" and ("fusion" not in models or main_window not in windows):
+            logging.info("explain skipped: it needs the fusion model on the main window (%s)", main_window)
+        else:
+            from liverrisk.explain import run_explain
+            run_explain(cfg, device)
 
 
 if __name__ == "__main__":

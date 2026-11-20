@@ -2,16 +2,18 @@
 
 Paper: Methods > Statistical analysis; Fig. 2; Table S7.
 
-- AUROC, AUPRC, sensitivity, specificity with 95% percentile-bootstrap CIs
-- cutoff by the Youden index, chosen on the validation predictions (config: evaluate.cutoff_from)
+- AUROC, AUPRC, sensitivity, specificity with 95% CIs. The paper does not state how its CIs were
+  computed; this release uses a percentile bootstrap (evaluate.n_bootstrap resamples).
+- cutoff by the Youden index, chosen on the validation predictions (evaluate.cutoff_from)
 - DeLong test for AUROC differences against the reference model (fusion)
 - KNKPC rule: flagged if HBV, HCV or cirrhosis (2022 KLCA-NCC surveillance targets)
-- risk quintiles of the reference model: cases, 5-year cumulative incidence (Kaplan-Meier)
-  and hazard ratios vs Q1 (Cox)
-- calibration: Brier score; Platt and isotonic recalibration fitted on validation predictions
+- risk quintiles of the reference model: cases, crude incidence per 100,000 (as in Fig. 2B),
+  Kaplan-Meier 5-year cumulative incidence and Cox hazard ratios vs Q1
+- calibration (not reported in the paper): Brier score; Platt and isotonic recalibration fitted
+  on validation predictions and scored on the test set
 
-The CI, DeLong and survival code is written from the paper's Methods; the original analysis
-notebooks for these parts were not part of the released code.
+The DeLong, bootstrap and survival code was written for this release; the original notebooks
+did not include it.
 
 In:  <output_dir>/predictions/*.csv, <processed_dir>/test.csv
 Out: <output_dir>/results/{performance,delong,risk_groups,calibration}.csv, <output_dir>/figures/*.png
@@ -62,6 +64,8 @@ def bootstrap_ci(y, p, cutoff, n_boot, seed, alpha=0.05) -> dict[str, tuple[floa
 
 def delong_test(y: np.ndarray, p1: np.ndarray, p2: np.ndarray) -> tuple[float, float, float, float]:
     """Paired DeLong test (fast version of Sun & Xu, 2014). Returns auc1, auc2, z, p."""
+    if np.isnan(p1).any() or np.isnan(p2).any():
+        raise ValueError("DeLong test got missing predictions")
     pos, neg = y == 1, y == 0
     m, n = pos.sum(), neg.sum()
     preds = np.vstack([p1, p2])
@@ -75,36 +79,55 @@ def delong_test(y: np.ndarray, p1: np.ndarray, p2: np.ndarray) -> tuple[float, f
     cov = np.cov(v01) / m + np.cov(v10) / n
     contrast = np.array([1.0, -1.0])
     var = contrast @ cov @ contrast
-    z = (aucs[0] - aucs[1]) / np.sqrt(var) if var > 0 else 0.0
+    if not var > 0:  # identical predictions
+        return float(aucs[0]), float(aucs[1]), float("nan"), float("nan")
+    z = (aucs[0] - aucs[1]) / np.sqrt(var)
     return float(aucs[0]), float(aucs[1]), float(z), float(2 * norm.sf(abs(z)))
 
 
 # ----------------------------------------------------------------------------- loading
-def load_predictions(cfg: dict) -> dict[tuple[str, str], pd.DataFrame]:
+def load_predictions(cfg: dict, test: pd.DataFrame) -> dict[tuple[str, str], pd.DataFrame]:
     out = {}
+    test_ids = set(test["id"])
     for f in sorted(paths(cfg)["predictions"].glob("*__*.csv")):
         model, window = f.stem.split("__", 1)
-        out[(model, window)] = pd.read_csv(f, dtype={"id": str})
+        df = pd.read_csv(f, dtype={"id": str})
+        if set(df.loc[df["split"] == "test", "id"]) != test_ids:
+            raise ValueError(f"{f.name} was made for a different test set; re-run --step train after --step split")
+        out[(model, window)] = df
     if not out:
         raise FileNotFoundError("No predictions found; run --step train first.")
     return out
 
 
-def knkpc_score(test: pd.DataFrame, markers: list[str]) -> np.ndarray:
+def knkpc_score(cfg: dict, test: pd.DataFrame) -> np.ndarray | None:
+    """1 if any KNKPC marker (HBV, HCV, cirrhosis) is present; None when the markers are not configured."""
+    markers = cfg["evaluate"].get("knkpc_markers") or []
+    if not markers or not set(markers) <= set(test.columns):
+        return None
     return test[markers].eq(1).any(axis=1).astype(float).to_numpy()
+
+
+def _cutoff_reference(cfg: dict) -> str:
+    source = cfg["evaluate"]["cutoff_from"]
+    if source not in ("valid", "test"):
+        raise ValueError(f"evaluate.cutoff_from must be 'valid' or 'test', got {source!r}")
+    return source
 
 
 # ----------------------------------------------------------------------------- analyses
 def performance_table(cfg, preds, test) -> pd.DataFrame:
     e = cfg["evaluate"]
+    source = _cutoff_reference(cfg)
     rows = []
-    y_test = test["liver_label"].to_numpy()
-    k = knkpc_score(test, e["knkpc_markers"])
-    m, ci = point_metrics(y_test, k, 1.0), bootstrap_ci(y_test, k, 1.0, e["n_bootstrap"], cfg["seed"])
-    rows.append({"window": "-", "model": "knkpc", "cutoff": 1.0, **m, **{f"{a}_ci": b for a, b in ci.items()}})
+    k = knkpc_score(cfg, test)
+    if k is not None:
+        y_test = test[cfg["label_column"]].to_numpy()
+        m, ci = point_metrics(y_test, k, 1.0), bootstrap_ci(y_test, k, 1.0, e["n_bootstrap"], cfg["seed"])
+        rows.append({"window": "-", "model": "knkpc", "cutoff": 1.0, **m, **{f"{a}_ci": b for a, b in ci.items()}})
     for (model, window), df in preds.items():
-        va, te = df[df["split"] == "valid"], df[df["split"] == "test"]
-        ref = va if e["cutoff_from"] == "valid" else te
+        ref = df[df["split"] == source]
+        te = df[df["split"] == "test"]
         cutoff = youden_cutoff(ref["y"].to_numpy(), ref["prob"].to_numpy())
         y, p = te["y"].to_numpy(), te["prob"].to_numpy()
         m, ci = point_metrics(y, p, cutoff), bootstrap_ci(y, p, cutoff, e["n_bootstrap"], cfg["seed"])
@@ -120,15 +143,16 @@ def performance_table(cfg, preds, test) -> pd.DataFrame:
 def delong_table(cfg, preds, test) -> pd.DataFrame:
     e = cfg["evaluate"]
     rows = []
-    windows = sorted({w for _, w in preds})
-    for window in windows:
+    k = knkpc_score(cfg, test)
+    for window in sorted({w for _, w in preds}):
         ref_key = (e["reference_model"], window)
         if ref_key not in preds:
             continue
         ref = preds[ref_key].query("split == 'test'").set_index("id")
         others = {m: preds[(m, window)].query("split == 'test'").set_index("id")["prob"]
                   for m, w in preds if w == window and m != e["reference_model"]}
-        others["knkpc"] = pd.Series(knkpc_score(test, e["knkpc_markers"]), index=test["id"])
+        if k is not None:
+            others["knkpc"] = pd.Series(k, index=test["id"])
         for model, prob in others.items():
             prob = prob.reindex(ref.index)
             a_ref, a_other, z, pval = delong_test(ref["y"].to_numpy(), ref["prob"].to_numpy(), prob.to_numpy())
@@ -138,7 +162,11 @@ def delong_table(cfg, preds, test) -> pd.DataFrame:
 
 
 def risk_groups(cfg, preds, test):
-    """Quintiles of predicted risk (reference model, main window) with KM incidence and Cox HRs."""
+    """Equal-size quintiles of predicted risk (reference model, main window).
+
+    Reports cases, crude incidence per 100,000 (cases / n, the measure in Fig. 2B), the
+    Kaplan-Meier cumulative incidence at the end of follow-up, and Cox hazard ratios vs Q1.
+    """
     from lifelines import CoxPHFitter, KaplanMeierFitter
 
     e = cfg["evaluate"]
@@ -146,7 +174,10 @@ def risk_groups(cfg, preds, test):
     if key not in preds:
         log.warning("risk groups skipped: no predictions for %s", key)
         return None, None
-    te = preds[key].query("split == 'test'").merge(test[["id", "fu_years"]], on="id")
+    if "fu_years" not in test.columns:
+        log.warning("risk groups skipped: no fu_years column in the cohort table")
+        return None, None
+    te = preds[key].query("split == 'test'").merge(test[["id", "fu_years"]], on="id", validate="one_to_one")
     q = e["n_risk_groups"]
     te["group"] = pd.qcut(te["prob"].rank(method="first"), q, labels=[f"Q{i + 1}" for i in range(q)])
     horizon = float(cfg["cohort"]["label_years"][1] - cfg["cohort"]["index_year"] + 1)
@@ -156,7 +187,8 @@ def risk_groups(cfg, preds, test):
         km = KaplanMeierFitter().fit(d["fu_years"], d["y"])
         curves[g] = 1 - km.survival_function_.iloc[:, 0]
         rows.append({"group": g, "n": len(d), "cases": int(d["y"].sum()),
-                     "cum_incidence_per_100k": float(1 - km.predict(horizon - 1e-9)) * 1e5})
+                     "crude_per_100k": d["y"].mean() * 1e5,
+                     "km_cum_incidence_per_100k": float(1 - km.predict(horizon - 1e-9)) * 1e5})
     dummies = pd.get_dummies(te["group"], drop_first=True, dtype=float)
     cox = CoxPHFitter().fit(pd.concat([te[["fu_years", "y"]], dummies], axis=1), "fu_years", "y")
     hr = np.exp(cox.confidence_intervals_).join(np.exp(cox.params_).rename("hr"))
@@ -186,17 +218,18 @@ def plot_roc(cfg, preds, test, perf, path):
 
     window = cfg["features"]["main_window"]
     fig, ax = plt.subplots(figsize=(5, 5))
-    y = test["liver_label"].to_numpy()
-    fpr, tpr, _ = roc_curve(y, knkpc_score(test, cfg["evaluate"]["knkpc_markers"]))
-    r = perf.query("model == 'knkpc'").iloc[0]
-    ax.plot(fpr, tpr, label=f"KNKPC ({r.auroc:.3f} [{r.auroc_lo:.3f}-{r.auroc_hi:.3f}])")
+    k = knkpc_score(cfg, test)
+    if k is not None:
+        fpr, tpr, _ = roc_curve(test[cfg["label_column"]].to_numpy(), k)
+        r = perf.query("model == 'knkpc'").iloc[0]
+        ax.plot(fpr, tpr, label=f"KNKPC ({r.auroc:.3f} [{r.auroc_lo:.3f}-{r.auroc_hi:.3f}])")
     for model in cfg["evaluate"]["models"]:
         if (model, window) not in preds:
             continue
         te = preds[(model, window)].query("split == 'test'")
         fpr, tpr, _ = roc_curve(te["y"], te["prob"])
         r = perf.query("model == @model and window == @window").iloc[0]
-        ax.plot(fpr, tpr, label=f"{LABELS[model]} ({r.auroc:.3f} [{r.auroc_lo:.3f}-{r.auroc_hi:.3f}])")
+        ax.plot(fpr, tpr, label=f"{LABELS.get(model, model)} ({r.auroc:.3f} [{r.auroc_lo:.3f}-{r.auroc_hi:.3f}])")
     ax.plot([0, 1], [0, 1], "--", color="grey")
     ax.set(xlabel="1 - Specificity", ylabel="Sensitivity", title=f"ROC, window {window}")
     ax.legend(loc="lower right", fontsize=8)
@@ -213,7 +246,7 @@ def plot_risk(curves, table, path):
         r = table.query("group == @g").iloc[0]
         ax.step(curve.index, curve.values * 100, where="post",
                 label=f"{g}: {r.cases} cases, HR {r.hr:.2f}")
-    ax.set(xlabel="Time (years)", ylabel="Cumulative risk (%)", title="Liver cancer by predicted-risk quintile")
+    ax.set(xlabel="Time (years)", ylabel="Cumulative risk (%)", title="Cumulative incidence by predicted-risk quintile")
     ax.legend(fontsize=8)
     fig.tight_layout()
     fig.savefig(path, dpi=200)
@@ -224,7 +257,7 @@ def run_evaluate(cfg: dict) -> pd.DataFrame:
     p = paths(cfg)
     ensure_dirs(p["results"], p["figures"])
     test = read_cohort(p["processed"] / "test.csv")
-    preds = load_predictions(cfg)
+    preds = load_predictions(cfg, test)
 
     perf = performance_table(cfg, preds, test)
     perf.to_csv(p["results"] / "performance.csv", index=False)
@@ -236,7 +269,7 @@ def run_evaluate(cfg: dict) -> pd.DataFrame:
         table.to_csv(p["results"] / "risk_groups.csv", index=False)
         plot_risk(curves, table, p["figures"] / "cumulative_risk.png")
 
-    show = perf.assign(model=perf["model"].map(LABELS))
+    show = perf.assign(model=perf["model"].map(lambda m: LABELS.get(m, m)))
     for metric in ["auroc", "auprc", "sensitivity", "specificity"]:
         show[metric] = [f"{a:.3f} ({lo:.3f}-{hi:.3f})" for a, lo, hi in
                         zip(show[metric], show[f"{metric}_lo"], show[f"{metric}_hi"])]

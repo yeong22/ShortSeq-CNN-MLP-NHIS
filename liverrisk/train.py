@@ -4,7 +4,8 @@ Paper: Methods > Model development and validation; Table S4; Methods S2.
 
 The training set is split once more (80/20, stratified on the outcome). Every model is fit on
 the 80% part; the 20% part is used for early stopping, hyperparameter search (--search) and for
-choosing the classification cutoff. The test set is only used in the evaluate step.
+choosing the classification cutoff. The test set is never used for fitting, early stopping,
+tuning or the cutoff; its predictions are only written out for the evaluate step.
 
 In:  <processed_dir>/train.csv, test.csv
 Out: <output_dir>/models/{model}__{window}.*, preprocessor.json
@@ -125,8 +126,10 @@ def fit_torch(name, flat, spec, data, train_cfg, schedule, max_epochs, patience,
         model.train()
         running, seen = 0.0, 0
         for *feats, target in train_loader:
-            feats = [f.to(device, non_blocking=True) for f in feats]
-            target = target.to(device, non_blocking=True)
+            # async copies are only safe from pinned memory, which the loader uses on CUDA alone
+            asynchronous = device.type == "cuda"
+            feats = [f.to(device, non_blocking=asynchronous) for f in feats]
+            target = target.to(device, non_blocking=asynchronous)
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(device_type=device.type, enabled=use_amp):
                 loss = criterion(model(*feats), target)
@@ -190,7 +193,7 @@ def prepare(cfg: dict):
     ensure_dirs(p["models"], p["predictions"])
     pre.save(p["models"] / "preprocessor.json")
     tr_idx, va_idx = train_test_split(np.arange(len(train_df)), test_size=cfg["split"]["valid_size"],
-                                      stratify=train_df["liver_label"], random_state=cfg["split"]["valid_seed"])
+                                      stratify=train_df[cfg["label_column"]], random_state=cfg["split"]["valid_seed"])
     X_train = pre.transform(train_df)
     X_test = pre.transform(test_df)
     parts = {
@@ -204,18 +207,20 @@ def prepare(cfg: dict):
 def run_train(cfg: dict, models: list[str], windows: list[str], search: bool, device: torch.device) -> None:
     p = paths(cfg)
     seed = cfg["seed"]
+    label = cfg["label_column"]
     parts = prepare(cfg)
     for window in windows:
         spec = window_spec(cfg, window)
-        data = {k: {"arrays": to_arrays(X, spec), "y": raw["liver_label"].to_numpy(), "id": raw["id"].to_numpy()}
+        data = {k: {"arrays": to_arrays(X, spec), "y": raw[label].to_numpy(), "id": raw["id"].to_numpy()}
                 for k, (X, raw) in parts.items()}
         for name in models:
             log.info("== %s | window %s | %d features", name, window, len(spec["flat"]))
             tag = f"{name}__{window}"
             if name in SKLEARN_MODELS:
                 params = dict(cfg["models"][name])
-                X_tr, y_tr = data["train"]["arrays"]["flat"], data["train"]["y"]
-                X_va, y_va = data["valid"]["arrays"]["flat"], data["valid"]["y"]
+                # float64 as in the original notebook (newton-cg stops elsewhere in float32)
+                X_tr, y_tr = data["train"]["arrays"]["flat"].astype(np.float64), data["train"]["y"]
+                X_va, y_va = data["valid"]["arrays"]["flat"].astype(np.float64), data["valid"]["y"]
                 if search:
                     sc = cfg["search"][name]
                     params, trials = greedy_search(
@@ -224,7 +229,7 @@ def run_train(cfg: dict, models: list[str], windows: list[str], search: bool, de
                         maximize=True)
                     (p["models"] / f"{tag}.search.json").write_text(json.dumps(_json_safe(trials), indent=1))
                 model = fit_sklearn(name, params, X_tr, y_tr, seed)
-                predict = lambda arr: model.predict_proba(arr["flat"])[:, 1]  # noqa: E731
+                predict = lambda arr: model.predict_proba(arr["flat"].astype(np.float64))[:, 1]  # noqa: E731
                 with open(p["models"] / f"{tag}.pkl", "wb") as fh:
                     pickle.dump(model, fh)
                 info = {"params": params}
@@ -234,11 +239,16 @@ def run_train(cfg: dict, models: list[str], windows: list[str], search: bool, de
                 if search:
                     sc = cfg["search"][name]
                     epochs = cfg["search"]["torch_epochs"][name]
-                    flat, trials = greedy_search(
-                        sc["groups"], sc["candidates"], flat,
-                        lambda prm: fit_torch(name, prm, spec, data, cfg["train"], sched, epochs,
-                                              cfg["search"]["torch_patience"], device, seed)[1]["best_valid_loss"],
-                        maximize=False)
+                    by_auroc = cfg["search"]["scoring"][name] == "auroc"  # notebooks: MLP by AUROC, fusion by loss
+
+                    def score(prm):
+                        info_ = fit_torch(name, prm, spec, data, cfg["train"], sched, epochs,
+                                          cfg["search"]["torch_patience"], device, seed)[1]
+                        if by_auroc:
+                            return max(h["valid_auroc"] for h in info_["history"])
+                        return info_["best_valid_loss"]
+
+                    flat, trials = greedy_search(sc["groups"], sc["candidates"], flat, score, maximize=by_auroc)
                     (p["models"] / f"{tag}.search.json").write_text(json.dumps(_json_safe(trials), indent=1))
                 model, info = fit_torch(name, flat, spec, data, cfg["train"], sched, cfg["train"]["max_epochs"],
                                         cfg["train"]["early_stopping_patience"], device, seed)

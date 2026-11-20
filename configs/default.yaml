@@ -1,5 +1,5 @@
 # Default settings for the paper (BMC Med Inform Decis Mak 2026;26:44).
-# Every number the code uses lives here. Edit this file, not the code.
+# Study settings live here: data layout, cohort rules, features, hyperparameters, analyses.
 
 seed: 42
 
@@ -16,10 +16,11 @@ raw_files:
   claims_pattern: t20/t20_{year}.csv  # outpatient/inpatient claims, one file per year
 
 id_column: INDI_DSCM_NO
+label_column: liver_label     # outcome column in the analytic table (1 = event in the follow-up window)
 
 # NHIS column names. Yearly columns are "<prefix>_<year>", e.g. G1E_BMI_2014.
 raw_columns:
-  screening:               # measured at each exam; value per period = first exam of the period
+  screening:               # measured at each exam; one value per period (cohort.period_value)
     bmi: G1E_BMI
     hemoglobin: G1E_HGB
     glucose: G1E_FBS
@@ -50,6 +51,7 @@ raw_columns:
     any_cancer: all_cancer
     liver_cancer: liver_sex   # sex-specific definition: C22.0/C22.9 (men), C22.0 (women)
     death_date: DTH_ASSMD_DT
+    diagnosis_date: diagnosis_date   # optional (YYYYMMDD); without it the middle of the diagnosis year is used
   claims_date: MDCARE_STRT_DT
 
 cohort:
@@ -66,21 +68,26 @@ cohort:
     t1: [2010, 2011]
     t2: [2012, 2013]
     t3: [2014, 2015]
+  # first = first exam of the period, second year fills a gap (the analysis notebooks)
+  # last  = most recent exam of the period (the paper's wording)
+  period_value: first
   # Insurance contribution (20 levels) -> household income quartile, 1 = highest.
-  # Values not listed are treated as missing, as in the original analysis.
+  # Levels not listed (10 and 16) are treated as missing, as in the analysis notebooks.
   income_groups:
     1: [17, 18, 19, 20]
     2: [11, 12, 13, 14, 15]
     3: [5, 6, 7, 8, 9]
     4: [0, 1, 2, 3, 4]
-  # drinks/day: 0 -> 0, <1 -> 1, <2 -> 2, <4 -> 3, else 4
+  # drinks/day: 0 -> 0, <1 -> 1, <2 -> 2, <4 -> 3, else 4 (notebooks; Table S3 words the bins as <=1, <=2, <=4)
   alcohol_cutoffs: [1, 2, 4]
   # exercise days/week, mean of vigorous and moderate: 0 -> 0, <2 -> 1, <4 -> 2, else 3
   activity_cutoffs: [2, 4]
   # Event time when only the diagnosis year is known (a diagnosis_date column is used if present).
   event_time: mid_year
 
-# ICD-10 codes for liver-disease history (Table S2). Codes are written without the dot.
+# ICD-10 codes for liver-disease history, as used in the analysis notebooks. Table S2 prints a few
+# codes differently (see README, Notes on Reproducibility); MASLD includes I10 as in the notebooks.
+# Codes are written without the dot.
 # "X" matches any single character and the pattern is matched as a prefix;
 # a pattern without "X" must match the whole code.
 icd10:
@@ -119,11 +126,12 @@ features:
 split:
   test_size: 0.2
   seed: 6875
-  stratify_on: [liver_label, age_decade, sex]   # patient-level, stratified
+  stratify_on: [liver_label, age_decade, sex]   # patient-level; age_decade is derived from age
   valid_size: 0.2       # taken from the training set for early stopping / tuning
   valid_seed: 42
 
-# Final hyperparameters (Table S4). "python main.py --step train --search" re-runs the search.
+# Final hyperparameters (Table S4, tuned on the main window and used for every window by default).
+# "python main.py --step train --search" tunes each window separately, starting from these values.
 models:
   lr:
     class_weight: balanced
@@ -163,7 +171,7 @@ models:
       fc_activation: SiLU
       fc_dropout: 0.1
       fc_batch_norm: true
-    optim: {optimizer: Adam, learning_rate: 0.001, batch_size: 9048}
+    optim: {optimizer: Adam, learning_rate: 0.001, batch_size: 9048}   # as printed in Table S4 (outside the search grid)
     loss: {gamma_pos: 0.05, gamma_neg: 2.5, margin: 0.2}
     schedule: {T_0: 10, T_mult: 2, eta_min: 1.0e-8}
 
@@ -176,6 +184,7 @@ train:
 
 # Group-wise greedy search (Methods S2): tune one group at a time, keep the best, move on.
 search:
+  scoring: {lr: auroc, xgb: auroc, mlp: auroc, fusion: loss}   # validation criterion per model, as in the notebooks
   torch_epochs: {mlp: 20, fusion: 50}
   torch_patience: 10
   lr:
@@ -240,16 +249,16 @@ search:
       batch_size: [512, 256]
 
 evaluate:
-  models: [lr, xgb, mlp, fusion]
-  reference_model: fusion        # DeLong tests compare every model with this one
-  n_bootstrap: 1000              # 95% CIs
-  cutoff: youden
+  models: [lr, xgb, mlp, fusion]   # curves drawn in roc.png (every trained model is evaluated)
+  reference_model: fusion        # DeLong reference and the model used for risk quintiles
+  n_bootstrap: 1000              # percentile-bootstrap 95% CIs (the paper does not state its CI method)
   cutoff_from: valid             # where the Youden cutoff is chosen: valid | test
-  knkpc_markers: [hbv, hcv, cirrhosis]   # 2022 KLCA-NCC surveillance target groups
+  knkpc_markers: [hbv, hcv, cirrhosis]   # 2022 KLCA-NCC surveillance targets; [] skips this baseline
   n_risk_groups: 5               # quintiles of predicted risk
 
 explain:
   model: fusion
   sample_ratio: 0.01             # share of the test set explained
-  n_background: 50
+  n_background: 50               # the first rows of that sample, used as the SHAP background
+  silu_rule: rescale             # rescale (exact DeepSHAP) | gradient (as in the original analysis)
   max_display: 20

@@ -1,8 +1,13 @@
 """Step 5: SHAP explanations for the fusion model (Fig. 3).
 
-DeepExplainer runs on a random sample of the test set with a small background set. SHAP values
-of the static and temporal inputs are joined into one matrix so that every column is one
-predictor at one time point (e.g. total_chol_t3).
+DeepExplainer runs on a random sample of the test set; the first rows of that sample also serve
+as the background, as in the original analysis. SHAP values of the static and temporal inputs are
+joined into one matrix so that every column is one predictor at one time point (e.g. total_chol_t3).
+
+shap's DeepExplainer has no rule for SiLU, the activation of the published fusion model, and
+falls back to a plain gradient (the original analysis ran that way). With explain.silu_rule:
+rescale (default) SiLU gets the DeepLIFT rescale rule used for other elementwise activations,
+so the values add up to the model output; "gradient" reproduces the original behaviour.
 
 In:  <output_dir>/models/fusion__<main window>.pt, preprocessor.json, <processed_dir>/test.csv
 Out: <output_dir>/figures/shap_{beeswarm,bar,temporal}.png
@@ -34,7 +39,19 @@ def _as_matrix(values, n: int) -> np.ndarray:
     return np.concatenate(flat, axis=1)
 
 
-def run_explain(cfg: dict, device: torch.device) -> pd.DataFrame:
+def _register_rules(silu_rule: str) -> None:
+    from shap.explainers._deep import deep_pytorch as dp
+
+    dp.op_handler.setdefault("Identity", dp.passthrough)
+    if silu_rule == "rescale":
+        dp.op_handler["SiLU"] = dp.nonlinear_1d
+    elif silu_rule == "gradient":
+        dp.op_handler.pop("SiLU", None)
+    else:
+        raise ValueError(f"explain.silu_rule must be 'rescale' or 'gradient', got {silu_rule!r}")
+
+
+def run_explain(cfg: dict, device: torch.device) -> pd.DataFrame | None:
     import matplotlib.pyplot as plt
     import shap
 
@@ -42,7 +59,11 @@ def run_explain(cfg: dict, device: torch.device) -> pd.DataFrame:
     ensure_dirs(p["results"], p["figures"])
     e = cfg["explain"]
     window = cfg["features"]["main_window"]
-    ckpt = torch.load(p["models"] / f"{e['model']}__{window}.pt", map_location=device, weights_only=False)
+    ckpt_path = p["models"] / f"{e['model']}__{window}.pt"
+    if not ckpt_path.exists():
+        log.warning("explain skipped: %s not found (train the fusion model on window %s first)", ckpt_path, window)
+        return None
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
     if ckpt["model"] != "fusion":
         raise ValueError("explain step expects the fusion model")
     spec = ckpt["spec"]
@@ -58,22 +79,26 @@ def run_explain(cfg: dict, device: torch.device) -> pd.DataFrame:
     temporal = torch.tensor(arrays["temporal"], device=device)
     nb = e["n_background"]
     background = [static[:nb], temporal[:nb]]
-    data = [static[nb:], temporal[nb:]]
-    n = len(data[0])
-    log.info("SHAP on %d test rows (background %d)", n, nb)
+    data = [static, temporal]
+    n = len(static)
+    log.info("SHAP on %d test rows (background: the first %d of them)", n, nb)
 
-    try:
-        values = shap.DeepExplainer(model, background).shap_values(data, check_additivity=False)
-    except Exception as err:  # some layer types are not supported by DeepExplainer
-        log.warning("DeepExplainer failed (%s); using GradientExplainer", err)
-        values = shap.GradientExplainer(model, background).shap_values(data)
+    _register_rules(e["silu_rule"])
+    explainer = shap.DeepExplainer(model, background)
+    values = explainer.shap_values(data, check_additivity=False)
+    shap_matrix = _as_matrix(values, n)
+
+    with torch.no_grad():
+        output = model(*data).float().cpu().numpy().ravel()
+    expected = float(np.ravel(explainer.expected_value)[0])
+    gap = np.abs(output - (expected + shap_matrix.sum(axis=1)))
+    log.info("additivity: mean |f(x) - (E[f] + sum SHAP)| = %.2e (max %.2e) on the logit scale",
+             gap.mean(), gap.max())
 
     # column order: static, then temporal variable by variable, each oldest -> newest
     temporal_names = [col for cols in spec["temporal"].values() for col in cols]
     names = spec["static"] + temporal_names
-    shap_matrix = _as_matrix(values, n)
-    feature_matrix = np.concatenate(
-        [arrays["static"][nb:], arrays["temporal"][nb:].reshape(n, -1)], axis=1)
+    feature_matrix = np.concatenate([arrays["static"], arrays["temporal"].reshape(n, -1)], axis=1)
 
     importance = pd.DataFrame({"feature": names, "mean_abs_shap": np.abs(shap_matrix).mean(axis=0)})
     importance = importance.sort_values("mean_abs_shap", ascending=False)
@@ -87,16 +112,16 @@ def run_explain(cfg: dict, device: torch.device) -> pd.DataFrame:
         plt.close()
 
     times = spec["times"]
-    temporal = (importance.set_index("feature").loc[temporal_names, "mean_abs_shap"]
-                .to_numpy().reshape(len(spec["temporal"]), len(times)))
-    temporal_df = pd.DataFrame(temporal, index=list(spec["temporal"]), columns=times)
+    temporal_shap = (importance.set_index("feature").loc[temporal_names, "mean_abs_shap"]
+                     .to_numpy().reshape(len(spec["temporal"]), len(times)))
+    temporal_df = pd.DataFrame(temporal_shap, index=list(spec["temporal"]), columns=times)
     temporal_df.to_csv(p["results"] / "shap_temporal.csv")
     fig, ax = plt.subplots(figsize=(1.2 * len(times) + 3, 4))
-    im = ax.imshow(temporal, cmap="YlOrRd", aspect="auto")
+    im = ax.imshow(temporal_shap, cmap="YlOrRd", aspect="auto")
     ax.set_xticks(range(len(times)), times)
     ax.set_yticks(range(len(temporal_df)), temporal_df.index)
     fig.colorbar(im, ax=ax, label="mean |SHAP|")
-    ax.set_title("Temporal predictors by screening period")
+    ax.set_title("Temporal predictors by time point")
     fig.tight_layout()
     fig.savefig(p["figures"] / "shap_temporal.png", dpi=200)
     plt.close(fig)
