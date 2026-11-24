@@ -1,2 +1,1 @@
-# Count only the Python code in GitHub's language bar (the SAS file holds the Cox models).
 *.sas linguist-detectable=false

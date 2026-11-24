@@ -2,8 +2,8 @@
 
 Paper: Methods > Statistical analysis; Fig. 2; Table S7.
 
-- AUROC, AUPRC, sensitivity, specificity with 95% CIs. The paper does not state how its CIs were
-  computed; this release uses a percentile bootstrap (evaluate.n_bootstrap resamples).
+- AUROC, AUPRC, sensitivity, specificity with percentile-bootstrap 95% CIs
+  (evaluate.n_bootstrap resamples; the paper does not state its CI method)
 - cutoff by the Youden index, chosen on the validation predictions (evaluate.cutoff_from)
 - DeLong test for AUROC differences against the reference model (fusion)
 - KNKPC rule: flagged if HBV, HCV or cirrhosis (2022 KLCA-NCC surveillance targets)
@@ -12,8 +12,7 @@ Paper: Methods > Statistical analysis; Fig. 2; Table S7.
 - calibration (not reported in the paper): Brier score; Platt and isotonic recalibration fitted
   on validation predictions and scored on the test set
 
-The DeLong, bootstrap and survival code was written for this release; the original notebooks
-did not include it.
+The DeLong, bootstrap and survival analyses are not in the original notebooks.
 
 In:  <output_dir>/predictions/*.csv, <processed_dir>/test.csv
 Out: <output_dir>/results/{performance,delong,risk_groups,calibration}.csv, <output_dir>/figures/*.png

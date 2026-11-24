@@ -1,4 +1,4 @@
-# data never leaves the analysis environment
+# data and outputs
 data/*
 !data/README.md
 outputs/
@@ -12,7 +12,7 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 
-# secrets and local files
+# local files
 .env
 .DS_Store
 *.sas7bdat

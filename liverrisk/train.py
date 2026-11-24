@@ -2,10 +2,9 @@
 
 Paper: Methods > Model development and validation; Table S4; Methods S2.
 
-The training set is split once more (80/20, stratified on the outcome). Every model is fit on
-the 80% part; the 20% part is used for early stopping, hyperparameter search (--search) and for
-choosing the classification cutoff. The test set is never used for fitting, early stopping,
-tuning or the cutoff; its predictions are only written out for the evaluate step.
+The training set is split once more (80/20, stratified on the outcome). Models are fit on the
+80% part; the 20% part is used for early stopping, hyperparameter search (--search) and the
+classification cutoff. Test-set predictions are saved for the evaluate step.
 
 In:  <processed_dir>/train.csv, test.csv
 Out: <output_dir>/models/{model}__{window}.*, preprocessor.json
@@ -153,6 +152,8 @@ def fit_torch(name, flat, spec, data, train_cfg, schedule, max_epochs, patience,
             if waited >= patience:
                 log.info("  early stop; best epoch %d", best_epoch)
                 break
+    if best_state is None:
+        raise RuntimeError(f"{name}: validation loss was not finite in any epoch")
     model.load_state_dict(best_state)
     return model, {"best_epoch": best_epoch, "best_valid_loss": best_loss, "history": history}
 

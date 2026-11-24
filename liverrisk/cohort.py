@@ -104,7 +104,7 @@ def icd_regex(codes: list[str]) -> str:
 def liver_disease_history(cfg: dict, ids: pd.Index) -> pd.DataFrame:
     """Ever-diagnosed flags from claims in the history window (codes in `icd10`).
 
-    Memory stays proportional to the number of people with a hit: only their IDs are kept.
+    Only the IDs with a hit are kept in memory.
     """
     c = cfg["cohort"]
     raw_dir = paths(cfg)["raw"]

@@ -21,8 +21,12 @@ class AsymmetricLoss(nn.Module):
 
     def forward(self, logits: torch.Tensor, target: torch.Tensor, reduction: str = "mean") -> torch.Tensor:
         logits, target = logits.float(), target.float()
-        p_neg = torch.clamp(torch.sigmoid(logits) - self.margin, min=self.eps)
-        shifted = logits * target + (torch.log(p_neg) - torch.log(1 - p_neg)) * (1 - target)
+        if self.margin > 0:
+            p_neg = torch.clamp(torch.sigmoid(logits) - self.margin, min=self.eps)
+            neg_logits = torch.log(p_neg) - torch.log(1 - p_neg)
+        else:
+            neg_logits = logits
+        shifted = logits * target + neg_logits * (1 - target)
         bce = F.binary_cross_entropy_with_logits(shifted, target, reduction="none")
         p_t = torch.exp(-bce)
         gamma = self.gamma_pos * target + self.gamma_neg * (1 - target)

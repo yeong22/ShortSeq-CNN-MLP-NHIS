@@ -1,5 +1,5 @@
-# Default settings for the paper (BMC Med Inform Decis Mak 2026;26:44).
-# Study settings live here: data layout, cohort rules, features, hyperparameters, analyses.
+# Settings used in the paper (BMC Med Inform Decis Mak 2026;26:44):
+# data layout, cohort rules, features, hyperparameters, analyses.
 
 seed: 42
 
@@ -86,7 +86,7 @@ cohort:
   event_time: mid_year
 
 # ICD-10 codes for liver-disease history, as used in the analysis notebooks. Table S2 prints a few
-# codes differently (see README, Notes on Reproducibility); MASLD includes I10 as in the notebooks.
+# codes differently (see docs/reproducibility.md); MASLD includes I10 as in the notebooks.
 # Codes are written without the dot.
 # "X" matches any single character and the pattern is matched as a prefix;
 # a pattern without "X" must match the whole code.

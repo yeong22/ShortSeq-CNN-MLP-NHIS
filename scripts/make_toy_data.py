@@ -1,7 +1,6 @@
-"""Write small SYNTHETIC tables in the NHIS layout so the pipeline can run end to end.
+"""Write small synthetic tables in the NHIS layout to try the pipeline without NHIS data.
 
-Every value is drawn from made-up distributions with a planted risk signal. Nothing here is
-derived from NHIS data, and results on these tables say nothing about the real cohort.
+All values are simulated with a planted risk signal; none come from NHIS data.
 
     python scripts/make_toy_data.py                 # 20,000 people -> data/toy/raw
     python scripts/make_toy_data.py --n 50000 --out data/toy/raw

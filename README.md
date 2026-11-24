@@ -36,7 +36,7 @@ Prepare the data:
 ~$ mkdir -p ./data/raw
 ```
 
-Place the NHIS tables in the ./data/raw directory (column list: [data/README.md](data/README.md)). Without NHIS access, create synthetic tables in the same layout:
+Place the NHIS tables in the ./data/raw directory (column list: [data/README.md](data/README.md)). Without NHIS access, create synthetic tables in the same layout under ./data/toy/raw:
 ```bash
 ~$ python scripts/make_toy_data.py
 ```
