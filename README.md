@@ -121,4 +121,4 @@ If you find this repository useful in your research, please cite our work:
 ```
 
 ## Contact
-Yewon Choi ([@yeong22](https://github.com/yeong22))
+Yewon Choi ([Homepage](https://yeong22.github.io), [Google Scholar](https://scholar.google.com/citations?hl=en&user=DFJ7HgkAAAAJ))
